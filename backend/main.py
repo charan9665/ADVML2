@@ -4,11 +4,12 @@ from pathlib import Path
 import csv, json, os, sqlite3
 from datetime import datetime, timezone
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from data_loader import load_dataset, DATA
 from database import initialize, connect, feedback_count, watched_ids, profile, save_profile
+from poster_loader import PosterLookupError, load_movie_poster
 from rl.q_learning import QLearner
 from rl.reward import rating_reward
 from rl.state_manager import GENRES, state_from_preferences, update_preferences
@@ -155,6 +156,20 @@ def trending(limit:int=Query(20,ge=1,le=100),window_days:int=Query(90,ge=7,le=36
 
 @app.get("/api/movies/{movie_id}")
 def get_movie(movie_id:int):ready();return movie_by_id(movie_id)
+
+@app.get("/api/movies/{movie_id}/poster")
+def get_movie_poster(movie_id:int):
+    ready()
+    row=movies[movies.MovieID==movie_id]
+    if row.empty:raise HTTPException(404,detail="Movie not found")
+    movie=row.iloc[0]
+    try:
+        poster=load_movie_poster(str(movie.Title),int(movie.Year) if pd.notna(movie.Year) else None)
+    except PosterLookupError as e:
+        raise HTTPException(502,detail=str(e)) from e
+    if poster is None:raise HTTPException(404,detail="No poster image is available for this movie")
+    image,media_type=poster
+    return Response(image,media_type=media_type,headers={"Cache-Control":"public, max-age=86400","X-Poster-Source":"Wikipedia"})
 
 @app.get("/api/users")
 def get_users(limit:int=Query(30,ge=1,le=100)):
