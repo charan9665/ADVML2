@@ -1,10 +1,52 @@
 # MovieMind
 
-MovieMind is a college mini-project demonstrating an interactive, personalized movie recommender with a genuine tabular Q-learning agent. This workspace now contains the verified original MovieLens 1M files. Historical offline interactions and feedback submitted in the web app are kept conceptually separate.
+### A personalized movie recommendation agent powered by Q-learning
 
-## Dataset setup
+MovieMind is a full-stack reinforcement learning mini-project for **Unit III: Reinforcement Learning**. It turns a movie rating into an observable learning step: the user rates a recommendation, the agent receives a reward, updates its Q-table and preference state, then uses the updated policy for later recommendations.
 
-Download the original [MovieLens 1M dataset from GroupLens](https://grouplens.org/datasets/movielens/1m/) and extract `ml-1m.zip` so these files exist:
+The interactive learner is a genuine tabular Q-learning agent. Separate offline experiments use historical MovieLens ratings for epsilon comparisons, fitted-Q training, and evaluation against popularity. Historical ratings are not presented as live user feedback or as counterfactual responses.
+
+## At a glance
+
+- **Dataset:** Original GroupLens MovieLens 1M — 6,040 users, 3,883 movies, 1,000,209 ratings.
+- **Algorithm:** Persistent, per-profile tabular Q-learning with epsilon-greedy exploration.
+- **Advanced component:** Offline fitted Q-learning with an ExtraTrees regressor.
+- **Evaluation:** Chronological holdout comparison against a popularity baseline.
+- **Interface:** React, Vite, FastAPI, SQLite, and Recharts.
+- **Poster artwork:** Wikipedia image lookup when available, with a generated fallback; an internet connection is needed to look up external images.
+
+## Contents
+
+- [Features](#features)
+- [Quick start](#quick-start)
+- [MovieLens dataset](#movielens-dataset)
+- [Reinforcement learning design](#reinforcement-learning-design)
+- [Experiments and evaluation](#experiments-and-evaluation)
+- [Project structure](#project-structure)
+- [Limitations](#limitations)
+- [Documentation](#documentation)
+
+## Features
+
+- Browse, search, and filter the MovieLens catalog.
+- Explore popular, trending, and personalized recommendations.
+- Switch between valid MovieLens user profiles; profiles and learned Q-state/action values stay isolated by user ID.
+- Rate a movie from 1 to 5 stars and inspect the reward, state transition, and Q-value update.
+- Review rating and recommendation history, genre preferences, and learning statistics.
+- Compare tabular Q-learning and fitted Q-learning with a popularity baseline.
+- Inspect the Q-learning and evaluation results in the dashboard and evaluation pages.
+
+## Quick start
+
+### Prerequisites
+
+- Python 3.10 or later.
+- Node.js `^20.19.0` or `>=22.12.0` (required by the installed Vite 8 release).
+- The MovieLens 1M dataset from [GroupLens](https://grouplens.org/datasets/movielens/1m/).
+
+### 1. Install the dataset
+
+Download `ml-1m.zip` from the official GroupLens page and extract it so these files are present:
 
 ```text
 data/ml-1m/movies.dat
@@ -12,105 +54,157 @@ data/ml-1m/ratings.dat
 data/ml-1m/users.dat
 ```
 
-The loader parses the original `::` delimited files with Pandas, converts timestamps to UTC datetimes, counts missing cells and duplicates, and extracts years and genres. The loader does not silently substitute sample data. If the files are absent, the API starts and reports the exact missing paths while data-dependent endpoints return HTTP 503.
-
-Verified workspace inspection: **6,040 users, 3,883 movies, 1,000,209 ratings**; zero duplicate rows and zero missing cells. Rating counts: 1★ 56,174; 2★ 107,557; 3★ 261,197; 4★ 348,971; 5★ 226,310. The 3,883 count is the number of actual rows in the downloaded file.
-
-### Windows manual download and extraction
-
-1. Open the official [GroupLens MovieLens 1M page](https://grouplens.org/datasets/movielens/1m/) and download `ml-1m.zip`.
-2. Move the downloaded ZIP into this repository's `data` directory.
-3. From the repository root in the VS Code terminal, run:
+On Windows, from the repository root:
 
 ```powershell
+New-Item -ItemType Directory -Force .\data | Out-Null
+# Save the downloaded ml-1m.zip to .\data\ first.
 Expand-Archive -LiteralPath .\data\ml-1m.zip -DestinationPath .\data
 Get-ChildItem .\data\ml-1m\movies.dat, .\data\ml-1m\ratings.dat, .\data\ml-1m\users.dat
 ```
 
-The extraction must produce `data/ml-1m/movies.dat`, `data/ml-1m/ratings.dat`, and `data/ml-1m/users.dat`. If Explorer extracts into an extra nested folder, move those three files directly into `data/ml-1m/`. Restart the API afterward. The local HTTPS download attempt in this environment fails certificate-chain validation, so do not disable TLS verification to work around it.
+The dataset is not committed to this repository. The loader uses the original `::`-delimited files and does not substitute sample data. If the files are missing, the API reports the missing paths and data-dependent requests return HTTP 503.
 
-## Reinforcement learning formulation
+### 2. Start the API
 
-- **Agent:** a user's persistent movie recommendation Q-learner.
-- **Environment:** catalog plus the user's explicit rating feedback.
-- **State:** five genre affinities (Action, Comedy, Romance, Drama, Sci-Fi), each quantized into low / medium / high. This gives at most 243 states and abstracts away the long rating history.
-- **Action:** recommend one movie from the most popular 600 eligible unseen titles. Movies rated through the app are excluded for that user.
-- **Reward:** 1★ → −2, 2★ → −1, 3★ → 0, 4★ → +1, 5★ → +2. The centered, bounded scale preserves ordering, treats a neutral rating as no preference evidence, and distinguishes positive from negative feedback.
-- **Next state:** update each represented genre affinity by a bounded increment proportional to reward, then quantize again.
-- **Policy:** epsilon-greedy. The action is selected uniformly at random for exploration; otherwise choose the highest Q value. Tied values use current genre affinity as a preference-aware tie-break, then random selection. Epsilon decays after updates to a minimum.
-- **Terminal state:** future value is zero when there are no eligible next actions.
-
-The tabular update is implemented directly in `backend/rl/q_learning.py`:
-
-`Q(s,a) ← Q(s,a) + α [r + γ maxₐ′ Q(s′,a′) − Q(s,a)]`
-
-The table persists in `models/q_table.json`; live feedback and profiles persist in SQLite. Interactive Q-state keys are namespaced by user ID, so users share the persisted model artifact without sharing one another's learned state/action values. Recommendations are logged separately from feedback.
-
-## Switching MovieLens profiles
-
-The header profile dropdown defaults to MovieLens User 1 and accepts any valid dataset user ID from 1 to 6040. The API verifies that the ID exists before the UI changes the active profile. The selected ID is stored in browser local storage and restored on refresh. Home recommendations, For You, movie feedback, profile/rating/recommendation history, and RL dashboard statistics follow the selected user. Historical ratings and saved feedback/preferences are kept distinct by user ID; invalid IDs show an inline error without switching the active profile. The legacy `demo` API profile remains supported for compatibility.
-
-## Offline fitted Q-learning
-
-`backend/rl/fitted_q_learning.py` provides a small ExtraTrees regression approximator and fitted-Q iteration. It is a distinct batch/offline component, not the interactive Q table and not live feedback. It fits explicit state/action/reward/next-state transitions sampled from the chronological training partition and bootstraps with the maximum prediction over a fixed pool of 64 popular training movies. This is a small action-space approximation; offline interactions are not described as online feedback.
-
-## Evaluation and experiments
-
-`experiments/evaluate.py` creates a global timestamp-ordered split (earlier ratings for train, later ratings for test), trains on the earlier partition only, filters each user's train-seen titles, and calculates Hit Rate@5/@10, Precision@5/@10, Recall@5/@10, catalog Coverage, and observed Average Reward. Relevance is rating ≥ 4. It saves a timestamped JSON, CSV, and comparison plot. `experiments/epsilon_experiments.py` runs a fixed-seed Q-learning replay over real user-rated MovieLens items for epsilon 1.0, 0.5, 0.1, and decaying epsilon; it saves summary/learning-curve CSVs and a plot. The replay is not a counterfactual live-user experiment. Both scripts use actual historical ratings and never synthesize MovieLens rows.
-
-Definitions: Hit Rate@K is the share of evaluated users with at least one relevant recommendation in the top K. Precision@K is relevant retrieved items divided by K. Recall@K is relevant retrieved items divided by all held-out relevant items for a user. Coverage is recommended catalog items divided by catalog size. Average Reward maps observed ratings to −2…+2.
-
-Actual measured comparisons and the epsilon replay results are documented in [docs/EVALUATION.md](docs/EVALUATION.md). The evaluation page reads the latest timestamped JSON result; the dashboard reads the latest epsilon experiment CSV. Q-learning did not outperform popularity on every metric in the measured split.
-
-## Architecture
-
-```text
-React + Vite + React Router + Recharts
-              │ /api (Vite proxy)
-              ▼
-FastAPI ── Pandas MovieLens loader
-   ├── Q-learning policy ── models/q_table.json
-   └── SQLite profiles, feedback, recommendation history
-```
-
-## Run locally
-
-Backend (Python 3.10+):
+In a terminal at the repository root:
 
 ```powershell
 cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-uvicorn main:app --reload
+python -m pip install -r requirements.txt
+uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Frontend (Node.js):
+The API is at `http://127.0.0.1:8000`; interactive API documentation is at `http://127.0.0.1:8000/docs`.
+
+### 3. Start the web app
+
+In a second terminal at the repository root:
 
 ```powershell
 cd frontend
 npm install
-npm run dev
+npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
-Open the Vite URL (usually `http://localhost:5173`). API docs are at `http://localhost:8000/docs`.
+Open `http://127.0.0.1:5173`. Vite proxies `/api` requests to the FastAPI backend. Keep both terminals running while using the app.
 
-## Pages
+## MovieLens dataset
 
-Home, Discover, Personalized For You, Movie Details with rating, Profile/history, RL Dashboard, Model Evaluation, and About. The poster art uses generated CSS fallbacks, so no TMDB key is required.
+The checked dataset contains:
 
-Architecture, algorithm, installation, and demonstration instructions are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/ALGORITHM.md](docs/ALGORITHM.md), [docs/INSTALLATION.md](docs/INSTALLATION.md), and [docs/DEMO_GUIDE.md](docs/DEMO_GUIDE.md).
+| Table | Rows |
+|---|---:|
+| Users | 6,040 |
+| Movies | 3,883 |
+| Ratings | 1,000,209 |
 
-## Project report notes
+The loader converts rating timestamps to UTC, parses movie genres and years, and reports missing cells and duplicate rows. Inspection of the current data found zero missing cells and zero duplicate rows. The API's `/api/dataset/summary` endpoint reports the loaded dataset statistics.
 
-**Problem:** static popularity recommendations do not adapt to a person's changing explicit preferences. **Objective:** demonstrate how repeated user rewards update a recommendation policy. **Expected outcome:** a working feedback loop with persisted tabular values and inspectable reward/state transitions.
+## Reinforcement learning design
 
-**Algorithm outline:** initialize Q values to zero; derive the current discrete state; select an eligible movie via epsilon-greedy; receive a 1–5 rating; map it to reward; update genre state; apply the Q-learning equation; persist both model and interaction; repeat with lower epsilon.
+| Element | MovieMind design |
+|---|---|
+| **Agent** | A tabular Q-learning policy, with state/action keys namespaced by profile ID. |
+| **Environment** | The movie catalog and the active user's explicit rating feedback. |
+| **State** | Five normalized genre affinities: Action, Comedy, Romance, Drama, and Sci-Fi. Each is discretized into low, medium, or high, giving at most `3^5 = 243` states. |
+| **Action** | Recommend a movie from up to 600 popular eligible titles the user has not rated. |
+| **Reward** | `1★ → -2`, `2★ → -1`, `3★ → 0`, `4★ → +1`, `5★ → +2`. |
+| **Next state** | Adjust the rated movie's represented genre affinities by a bounded amount proportional to reward, then discretize again. |
+| **Policy** | Epsilon-greedy: explore with a random eligible movie, otherwise choose a highest-Q action. Preference affinity breaks Q-value ties. Epsilon decays after feedback to a minimum. |
+| **Terminal case** | If no eligible next action remains, the future-value term is zero. |
 
-**Flow:** `Profile state → epsilon-greedy movie action → user rating → reward → next preference state → Q update → saved policy → next recommendation`.
+The learner uses `α = 0.15`, `γ = 0.85`, initial `ε = 0.25`, decay `0.995`, and minimum `ε = 0.03`. The update is:
 
-**Presentation outline:** problem and objective; MovieLens dataset; state/action/reward design; Q-learning equation and exploration; application demo; dashboard; chronological evaluation; limitations and future work. Future work includes calibrated contextual states, user-controlled TMDB posters, richer terminal treatment, fitted-Q offline training pipeline and independently validated ranking experiments.
+```text
+Q(s, a) ← Q(s, a) + α [r + γ max_a' Q(s', a') − Q(s, a)]
+```
 
-## Limitations and results
+The live cycle is:
 
-MovieLens 1M is a static historical dataset, and offline ratings do not represent live responses. Interactive preference updates use the demo account's direct ratings. Evaluation and experiments must be run locally after dataset installation; report the printed values with the split and seed. Screenshots can be added here after launching the UI.
+```text
+User profile → state → recommended movie → user rating → reward
+→ next state → Q-table update → persisted policy → next recommendation
+```
+
+The Q-table is persisted in `models/q_table.json`; profiles, submitted feedback, and recommendation history are stored in SQLite. Historical MovieLens ratings initialize a profile's genre affinities and help exclude movies the user has already rated.
+
+### Offline fitted Q-learning
+
+`backend/rl/fitted_q_learning.py` implements a simplified fitted-Q component using an ExtraTrees regressor over genre-affinity features and a normalized movie-ID action feature. It bootstraps over a fixed pool of 64 popular movies from the training window. This is a separate offline model, not the interactive Q-table or live feedback.
+
+## Experiments and evaluation
+
+Run these commands from the repository root after installing the dataset and backend dependencies:
+
+```powershell
+.\backend\.venv\Scripts\python.exe experiments\epsilon_experiments.py
+.\backend\.venv\Scripts\python.exe experiments\evaluate.py
+```
+
+Both scripts save timestamped result files and charts under `experiments/results/`; the evaluation script also writes a JSON summary.
+
+### Epsilon comparison
+
+The fixed-seed replay compares `ε = 1.0`, `0.5`, and `0.1` with a decaying strategy. It selects from sampled users' historically rated movies (1,000 users, up to 20 steps each), so it compares behavior on known outcomes; it does not estimate how a user would rate an unseen recommendation.
+
+| Strategy | Mean reward | Exploration rate | Final epsilon |
+|---|---:|---:|---:|
+| Fixed `1.0` | 0.7068 | 1.0000 | 1.0000 |
+| Fixed `0.5` | 0.8999 | 0.4981 | 0.5000 |
+| Fixed `0.1` | 0.9941 | 0.0998 | 0.1000 |
+| Decay from `1.0` | 0.8613 | 0.6285 | 0.3679 |
+
+### Chronological holdout results
+
+The recorded evaluation uses 800,168 earlier ratings for training and 200,041 later ratings for testing. Relevance is a held-out rating of 4 or 5. The table shows the measured `K = 10` results:
+
+| Model | Hit Rate@10 | Precision@10 | Recall@10 | Coverage | Observed reward / user |
+|---|---:|---:|---:|---:|---:|
+| Tabular Q-learning | 0.5979 | 0.1522 | 0.0300 | 0.1712 | 2.3606 |
+| Popularity baseline | 0.5782 | 0.1501 | 0.0301 | 0.0177 | 2.4728 |
+| Fitted Q-learning | 0.1755 | 0.0251 | 0.0043 | 0.6526 | 0.3130 |
+
+Q-learning is not better on every metric in this split; popularity has higher observed reward and the fitted-Q model has weak ranking metrics. These offline results are descriptive, not evidence of counterfactual live-user responses. See [docs/EVALUATION.md](docs/EVALUATION.md) for the full metrics, methodology, and caveats.
+
+## Project structure
+
+```text
+backend/
+  main.py                 FastAPI endpoints and recommendation flow
+  data_loader.py          MovieLens 1M loader
+  database.py             SQLite persistence
+  rl/                     Q-learning, state, reward, fitted-Q modules
+  recommender/            Popularity ranking and evaluation metrics
+frontend/
+  src/                    React application and styles
+experiments/
+  evaluate.py             Chronological policy comparison
+  epsilon_experiments.py  Epsilon exploration replay
+  results/                Timestamped experiment outputs
+tests/                    RL, dataset, and API integration tests
+docs/                     Algorithm, architecture, demo, and evaluation guides
+```
+
+## Limitations
+
+- MovieLens 1M is historical data; it does not contain recommendation exposure or live responses.
+- The interactive state models only five genres; other genres do not contribute to its discrete state.
+- The recommendation candidate set is capped for responsiveness.
+- The fitted-Q component is a teaching-scale approximation with a restricted action pool.
+- Movie poster lookup depends on internet access and image availability; generated artwork is used when no match is found.
+
+## Documentation
+
+- [Installation and runbook](docs/INSTALLATION.md)
+- [Learning algorithm](docs/ALGORITHM.md)
+- [System architecture](docs/ARCHITECTURE.md)
+- [Demo guide](docs/DEMO_GUIDE.md)
+- [Measured evaluation results](docs/EVALUATION.md)
+- [Project report notes](docs/PROJECT_REPORT.md)
+
+## Credits
+
+MovieLens 1M is provided by [GroupLens Research](https://grouplens.org/datasets/movielens/1m/). Movie poster thumbnails are looked up from Wikipedia when available. This project is an educational demonstration of reinforcement learning, not a production recommendation service.
