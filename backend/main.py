@@ -41,7 +41,24 @@ class Feedback(BaseModel):
 def ready():
     if movies.empty: raise HTTPException(503,detail=f"MovieLens data is unavailable: {dataset_error or 'no rows loaded'}")
 
+def validate_user(user):
+    """Validate MovieLens IDs while retaining the original interactive demo ID."""
+    ready()
+    if user == "demo":
+        return user
+    if not user.isdigit() or not 1 <= int(user) <= 6040:
+        raise HTTPException(422, detail="User ID must be between 1 and 6040")
+    if users.empty or not users.UserID.eq(int(user)).any():
+        raise HTTPException(404, detail=f"MovieLens user {user} was not found")
+    return str(int(user))
+
+def q_state_key(user, state):
+    # Interactive learning stays isolated per profile. Legacy unscoped Q rows
+    # remain in the persisted artifact and are never deleted during switching.
+    return f"user:{user}:{state}"
+
 def user_preferences(user):
+    user=validate_user(str(user))
     default={g:.5 for g in GENRES}
     if user.isdigit() and not movies.empty:
         history=ratings[ratings.UserID==int(user)]
@@ -81,7 +98,7 @@ def catalog_rows():
     return catalog
 
 def recommend(user,limit=12,record=True):
-    ready(); pref=user_preferences(user); state=state_from_preferences(pref); seen=watched_for_user(user)
+    user=validate_user(str(user)); pref=user_preferences(user); state=state_from_preferences(pref); state_key=q_state_key(user,state); seen=watched_for_user(user)
     rows=catalog_rows(); rows=rows[~rows.MovieID.isin(seen)].copy()
     if rows.empty:return []
     # Cap each request's action set to the 600 most popular unseen titles to keep it tractable.
@@ -92,7 +109,7 @@ def recommend(user,limit=12,record=True):
     for _ in range(min(limit,len(actions))):
         available=[a for a in actions if a not in chosen]
         if not available:break
-        action,mode=agent.choose(state,available,action_scores=action_scores)
+        action,mode=agent.choose(state_key,available,action_scores=action_scores)
         chosen.append(action); mid=int(action); row=rows[rows.MovieID==mid].iloc[0]
         m=movie_record(row); m.update({"mode":mode,"explanation":f"{mode.title()} choice for preference state {state}"})
         out.append(m)
@@ -145,6 +162,7 @@ def get_users(limit:int=Query(30,ge=1,le=100)):
 
 @app.get("/api/users/{user_id}/profile")
 def get_profile(user_id:str):
+    user_id=validate_user(user_id)
     prefs=user_preferences(user_id); count=feedback_count(user_id)
     rating_values=[]
     if not movies.empty and user_id.isdigit():
@@ -154,26 +172,41 @@ def get_profile(user_id:str):
 
 @app.get("/api/users/{user_id}/history")
 def history(user_id:str,limit:int=Query(40,ge=1,le=100)):
-    ready()
+    user_id=validate_user(user_id)
     if not user_id.isdigit():
         with connect() as c: rows=c.execute("SELECT movie_id,rating,reward,created_at FROM feedback WHERE user_id=? ORDER BY id DESC LIMIT ?",(user_id,limit)).fetchall()
         return [{"movie":movie_by_id(r[0]),"rating":r[1],"reward":r[2],"created_at":r[3]} for r in rows]
     h=ratings[ratings.UserID==int(user_id)].sort_values("Timestamp",ascending=False).head(limit)
-    return [{"movie":movie_by_id(int(r.MovieID)),"rating":int(r.Rating),"timestamp":int(r.Timestamp)} for r in h.itertuples(index=False)]
+    items=[{"movie":movie_by_id(int(r.MovieID)),"rating":int(r.Rating),"timestamp":int(r.Timestamp),"source":"MovieLens"} for r in h.itertuples(index=False)]
+    with connect() as c: feedback_rows=c.execute("SELECT movie_id,rating,reward,created_at FROM feedback WHERE user_id=? ORDER BY id DESC LIMIT ?",(user_id,limit)).fetchall()
+    feedback_by_movie={int(r[0]):{"movie":{"movie_id":int(r[0]),**movie_by_id(int(r[0]))},"rating":int(r[1]),"reward":float(r[2]),"created_at":r[3],"source":"feedback"} for r in feedback_rows}
+    combined={int(row["movie"]["movie_id"]):row for row in items}; combined.update(feedback_by_movie)
+    def history_sort(item):
+        if item.get("source")=="MovieLens": return int(item.get("timestamp",0))
+        try: return int(pd.Timestamp(item.get("created_at")).timestamp())
+        except Exception: return 0
+    return sorted(combined.values(),key=history_sort,reverse=True)[:limit]
+
+@app.get("/api/users/{user_id}/recommendation-history")
+def recommendation_history(user_id:str,limit:int=Query(40,ge=1,le=100)):
+    user_id=validate_user(user_id)
+    with connect() as c: rows=c.execute("SELECT movie_id,mode,state,created_at FROM recommendations WHERE user_id=? ORDER BY id DESC LIMIT ?",(user_id,limit)).fetchall()
+    return [{"movie":movie_by_id(r[0]),"mode":r[1],"state":r[2],"created_at":r[3]} for r in rows]
 
 @app.get("/api/recommendations/{user_id}")
-def recommendations(user_id:str,limit:int=Query(12,ge=1,le=50)):return recommend(user_id,limit)
+def recommendations(user_id:str,limit:int=Query(12,ge=1,le=50)):
+    return recommend(validate_user(user_id),limit)
 
 @app.post("/api/feedback")
 def feedback(body:Feedback):
-    ready()
+    body.user_id=validate_user(body.user_id)
     if movies[movies.MovieID==body.movie_id].empty:raise HTTPException(404,detail="Movie not found")
     with connect() as c:
         if c.execute("SELECT 1 FROM feedback WHERE user_id=? AND movie_id=?",(body.user_id,body.movie_id)).fetchone():raise HTTPException(409,detail="This user has already rated this movie")
     pref=user_preferences(body.user_id); state=state_from_preferences(pref); reward=rating_reward(body.rating)
     genres=movie_by_id(body.movie_id)["genres"]; next_pref=update_preferences(pref,genres,reward); next_state=state_from_preferences(next_pref)
     available=[str(int(x)) for x in catalog_rows().MovieID if int(x) not in watched_for_user(body.user_id) and int(x)!=body.movie_id]
-    old,new=agent.update(state,str(body.movie_id),reward,next_state,available,terminal=not available)
+    old,new=agent.update(q_state_key(body.user_id,state),str(body.movie_id),reward,q_state_key(body.user_id,next_state),available,terminal=not available)
     save_profile(body.user_id,next_pref); agent.save(MODEL)
     try:
         with connect() as c:c.execute("INSERT INTO feedback(user_id,movie_id,rating,reward,state,next_state,old_q,new_q) VALUES(?,?,?,?,?,?,?,?)",(body.user_id,body.movie_id,body.rating,reward,state,next_state,old,new))
@@ -182,19 +215,29 @@ def feedback(body:Feedback):
 
 @app.get("/api/rl/status")
 def rl_status(user_id:str="demo"):
+    user_id=validate_user(user_id)
     prefs=user_preferences(user_id)
     with connect() as c:
-        interactions=c.execute("SELECT COUNT(*) n FROM feedback").fetchone()["n"]
-        recs=c.execute("SELECT COUNT(*) n FROM recommendations").fetchone()["n"]
-        rewards=c.execute("SELECT AVG(reward) a FROM feedback").fetchone()["a"]
-        modes=c.execute("SELECT mode,COUNT(*) n FROM recommendations GROUP BY mode").fetchall()
-        history=c.execute("SELECT reward,created_at,old_q,new_q FROM feedback ORDER BY id").fetchall()
-    return {"alpha":agent.alpha,"gamma":agent.gamma,"epsilon":agent.epsilon,"interactions":interactions,"recommendations":recs,"average_reward":rewards or 0,"q_states":len(agent.q),"q_entries":sum(map(len,agent.q.values())),"state":state_from_preferences(prefs),"preferences":prefs,"exploration":next((r["n"] for r in modes if r["mode"]=="exploration"),0),"exploitation":next((r["n"] for r in modes if r["mode"]=="exploitation"),0),"reward_history":[{"episode":i+1,"reward":r["reward"],"date":r["created_at"]} for i,r in enumerate(history)],"q_history":[{"episode":i+1,"old_q":r["old_q"],"new_q":r["new_q"]} for i,r in enumerate(history)]}
+        interactions=c.execute("SELECT COUNT(*) n FROM feedback WHERE user_id=?",(user_id,)).fetchone()["n"]
+        recs=c.execute("SELECT COUNT(*) n FROM recommendations WHERE user_id=?",(user_id,)).fetchone()["n"]
+        rewards=c.execute("SELECT AVG(reward) a FROM feedback WHERE user_id=?",(user_id,)).fetchone()["a"]
+        modes=c.execute("SELECT mode,COUNT(*) n FROM recommendations WHERE user_id=? GROUP BY mode",(user_id,)).fetchall()
+        history=c.execute("SELECT reward,created_at,old_q,new_q FROM feedback WHERE user_id=? ORDER BY id",(user_id,)).fetchall()
+    user_rows={k:v for k,v in agent.q.items() if k.startswith(f"user:{user_id}:")}
+    return {"user_id":user_id,"alpha":agent.alpha,"gamma":agent.gamma,"epsilon":agent.epsilon,"interactions":interactions,"recommendations":recs,"average_reward":rewards or 0,"q_states":len(user_rows),"q_entries":sum(map(len,user_rows.values())),"state":state_from_preferences(prefs),"preferences":prefs,"exploration":next((r["n"] for r in modes if r["mode"]=="exploration"),0),"exploitation":next((r["n"] for r in modes if r["mode"]=="exploitation"),0),"reward_history":[{"episode":i+1,"reward":r["reward"],"date":r["created_at"]} for i,r in enumerate(history)],"q_history":[{"episode":i+1,"old_q":r["old_q"],"new_q":r["new_q"]} for i,r in enumerate(history)]}
 
 @app.get("/api/rl/q-table")
-def q_table(state:str|None=None,limit:int=Query(100,ge=1,le=500)):
-    data=agent.q if state is None else {state:agent.q.get(state,{})}
-    return {"states":{s:dict(sorted(row.items(),key=lambda x:x[1],reverse=True)[:limit]) for s,row in list(data.items())[:limit]},"total_states":len(agent.q)}
+def q_table(state:str|None=None,user_id:str|None=None,limit:int=Query(100,ge=1,le=500)):
+    if user_id is not None:
+        user_id=validate_user(user_id)
+        prefix=f"user:{user_id}:"
+        data={key[len(prefix):]:row for key,row in agent.q.items() if key.startswith(prefix)}
+        total=len(data)
+        if state is not None:data={state:data.get(state,{})}
+    else:
+        data=agent.q if state is None else {state:agent.q.get(state,{})}
+        total=len(agent.q)
+    return {"user_id":user_id,"states":{s:dict(sorted(row.items(),key=lambda x:x[1],reverse=True)[:limit]) for s,row in list(data.items())[:limit]},"total_states":total}
 
 @app.get("/api/rl/experiments")
 def experiments():

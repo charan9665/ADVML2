@@ -23,7 +23,9 @@ At startup, FastAPI initializes SQLite and loads the original `.dat` files. The 
 
 ## Persistence boundaries
 
-- `moviemind.sqlite3`: demo profiles, submitted feedback, transitions' old/new Q values, and recommendation history.
+- `moviemind.sqlite3`: per-user preference profiles, submitted feedback, transitions' old/new Q values, and recommendation history. MovieLens user IDs are validated against the loaded dataset.
+
+The active browser profile is persisted in local storage. Interactive Q-table entries use a `user:{user_id}:{discrete_state}` key namespace inside the existing persistent model artifact; changing profiles neither clears the artifact nor applies one user's learned state/action values to another user. Existing unscoped Q-table entries remain intact for compatibility.
 - `models/q_table.json`: interactive policy loaded at API startup and saved after feedback.
 - `models/offline_q_table_<timestamp>.json`: separate historical offline training artifact, never loaded as the interactive agent.
 - `experiments/results/`: timestamped measured evaluations and epsilon replay artifacts.

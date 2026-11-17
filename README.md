@@ -44,7 +44,11 @@ The tabular update is implemented directly in `backend/rl/q_learning.py`:
 
 `Q(s,a) ← Q(s,a) + α [r + γ maxₐ′ Q(s′,a′) − Q(s,a)]`
 
-The table persists in `models/q_table.json`; live feedback and profiles persist in SQLite. Recommendations are logged separately from feedback. The demo profile ID is `demo`; the profile box also accepts MovieLens user IDs for historical profile/history views.
+The table persists in `models/q_table.json`; live feedback and profiles persist in SQLite. Interactive Q-state keys are namespaced by user ID, so users share the persisted model artifact without sharing one another's learned state/action values. Recommendations are logged separately from feedback.
+
+## Switching MovieLens profiles
+
+The header profile dropdown defaults to MovieLens User 1 and accepts any valid dataset user ID from 1 to 6040. The API verifies that the ID exists before the UI changes the active profile. The selected ID is stored in browser local storage and restored on refresh. Home recommendations, For You, movie feedback, profile/rating/recommendation history, and RL dashboard statistics follow the selected user. Historical ratings and saved feedback/preferences are kept distinct by user ID; invalid IDs show an inline error without switching the active profile. The legacy `demo` API profile remains supported for compatibility.
 
 ## Offline fitted Q-learning
 

@@ -29,7 +29,7 @@ class FeedbackIntegrationTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_feedback_updates_persists_and_excludes_movie(self):
-        user="integration-demo"
+        user="demo"
         picks=self.client.get(f"/api/recommendations/{user}?limit=10").json()
         self.assertTrue(picks)
         selected=picks[0]
@@ -40,11 +40,58 @@ class FeedbackIntegrationTests(unittest.TestCase):
         self.assertGreater(event["new_q"],event["old_q"])
         self.assertTrue(main.MODEL.exists())
         restored=QLearner();restored.load(main.MODEL)
-        self.assertEqual(restored.value(event["state"],str(selected["movie_id"])),event["new_q"])
+        self.assertEqual(restored.value(main.q_state_key(user,event["state"]),str(selected["movie_id"])),event["new_q"])
         next_picks=self.client.get(f"/api/recommendations/{user}?limit=20").json()
         self.assertNotIn(selected["movie_id"],[m["movie_id"] for m in next_picks])
         history=self.client.get(f"/api/users/{user}/history").json()
         self.assertEqual(len(history),1)
         self.assertEqual(history[0]["rating"],5)
+
+    def test_movie_lens_profiles_are_isolated_and_validated(self):
+        main.agent.q["legacy-state"]={"77":0.42}
+        main.agent.max_q["legacy-state"]=0.42
+        profile_one=self.client.get("/api/users/1/profile")
+        profile_hundred=self.client.get("/api/users/100/profile")
+        self.assertEqual(profile_one.status_code,200)
+        self.assertEqual(profile_hundred.status_code,200)
+        self.assertNotEqual(profile_one.json()["rated_count"],profile_hundred.json()["rated_count"])
+        self.assertNotEqual(profile_one.json()["state"],profile_hundred.json()["state"])
+
+        history_one=self.client.get("/api/users/1/history?limit=100").json()
+        history_hundred=self.client.get("/api/users/100/history?limit=100").json()
+        ids_one={row["movie"]["movie_id"] for row in history_one}
+        ids_hundred={row["movie"]["movie_id"] for row in history_hundred}
+        self.assertNotEqual(ids_one,ids_hundred)
+
+        before_q=dict(main.agent.q)
+        picks_one=self.client.get("/api/recommendations/1?limit=10").json()
+        self.assertTrue(picks_one)
+        self.assertFalse(ids_one.intersection(row["movie_id"] for row in picks_one))
+        picked=picks_one[0]["movie_id"]
+        learned=self.client.post("/api/feedback",json={"user_id":"1","movie_id":picked,"rating":5})
+        self.assertEqual(learned.status_code,200,learned.text)
+        self.assertTrue(any(key.startswith("user:1:") for key in main.agent.q))
+        self.assertEqual(main.agent.q.get("legacy-state",{}),before_q.get("legacy-state",{}))
+        user_q=self.client.get("/api/rl/q-table?user_id=1").json()["states"]
+        other_q=self.client.get("/api/rl/q-table?user_id=100").json()["states"]
+        self.assertTrue(user_q)
+        self.assertFalse(other_q)
+
+        own_history=self.client.get("/api/users/1/history?limit=100").json()
+        other_history=self.client.get("/api/users/100/history?limit=100").json()
+        self.assertIn(picked,{row["movie"]["movie_id"] for row in own_history})
+        self.assertNotIn(picked,{row["movie"]["movie_id"] for row in other_history})
+        self.assertEqual(self.client.get("/api/users/1/recommendation-history").status_code,200)
+
+        picks_hundred=self.client.get("/api/recommendations/100?limit=10").json()
+        self.assertTrue(picks_hundred)
+        self.assertNotEqual([x["movie_id"] for x in picks_one],[x["movie_id"] for x in picks_hundred])
+        self.assertFalse(ids_hundred.intersection(row["movie_id"] for row in picks_hundred))
+        self.assertEqual(self.client.get("/api/rl/status?user_id=1").json()["interactions"],1)
+        self.assertEqual(self.client.get("/api/rl/status?user_id=100").json()["interactions"],0)
+
+        for invalid in ("0","6041","99999","abc"):
+            self.assertIn(self.client.get(f"/api/users/{invalid}/profile").status_code,(404,422))
+            self.assertIn(self.client.get(f"/api/recommendations/{invalid}").status_code,(404,422))
 
 if __name__=="__main__":unittest.main()
