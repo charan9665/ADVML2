@@ -1,0 +1,74 @@
+{
+  "dataset": "MovieLens 1M",
+  "train_rows": 800168,
+  "test_rows": 200041,
+  "train_cutoff_unix": 975768738,
+  "train_cutoff_utc": "2000-12-02T14:52:18+00:00",
+  "q_train_transitions": 800168,
+  "fitted_q_transition_sample": 50000,
+  "fitted_q_candidate_actions": 64,
+  "relevance_threshold": 4,
+  "seed": 17,
+  "results": [
+    {
+      "model": "Tabular Q-learning",
+      "users": 1783,
+      "k": 5,
+      "hit_rate": 0.44980370162647226,
+      "precision": 0.15524397083566918,
+      "recall": 0.016261662799381807,
+      "coverage": 0.10950300382304752,
+      "average_reward": 1.2148065058889512
+    },
+    {
+      "model": "Tabular Q-learning",
+      "users": 1783,
+      "k": 10,
+      "hit_rate": 0.5978687605159843,
+      "precision": 0.1521592821088048,
+      "recall": 0.0299793741214731,
+      "coverage": 0.1712179137083561,
+      "average_reward": 2.3606281547952888
+    },
+    {
+      "model": "Popularity baseline",
+      "users": 1783,
+      "k": 5,
+      "hit_rate": 0.45765563656758274,
+      "precision": 0.17285473920358801,
+      "recall": 0.017557407025899995,
+      "coverage": 0.01119606772255598,
+      "average_reward": 1.4503645541222658
+    },
+    {
+      "model": "Popularity baseline",
+      "users": 1783,
+      "k": 10,
+      "hit_rate": 0.5782389231632081,
+      "precision": 0.15008412787436803,
+      "recall": 0.030055946922049843,
+      "coverage": 0.01774986346258875,
+      "average_reward": 2.47279865395401
+    },
+    {
+      "model": "Fitted Q-learning",
+      "users": 1783,
+      "k": 5,
+      "hit_rate": 0.12226584408300617,
+      "precision": 0.030286034772854804,
+      "recall": 0.0027541212793947448,
+      "coverage": 0.451392681594757,
+      "average_reward": 0.19068984856982613
+    },
+    {
+      "model": "Fitted Q-learning",
+      "users": 1783,
+      "k": 10,
+      "hit_rate": 0.17554683118339875,
+      "precision": 0.0250701065619743,
+      "recall": 0.0043371337317342756,
+      "coverage": 0.6526488257782632,
+      "average_reward": 0.3129556926528323
+    }
+  ]
+}

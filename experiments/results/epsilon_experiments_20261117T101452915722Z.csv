@@ -1,0 +1,5 @@
+strategy,initial_epsilon,epsilon_decay,minimum_epsilon,steps_per_user,episodes,average_reward,exploration_rate,exploitation_rate,final_epsilon,seed,users
+epsilon_1.0,1.0,1.0,1.0,20,20000,0.7068,1.0,0.0,1.0,17,1000
+epsilon_0.5,0.5,1.0,0.5,20,20000,0.8999,0.49805,0.50195,0.5,17,1000
+epsilon_0.1,0.1,1.0,0.1,20,20000,0.9941,0.0998,0.9002,0.1,17,1000
+epsilon_decay,1.0,0.99995,0.03,20,20000,0.8613,0.6285,0.3715,0.36787024399384166,17,1000

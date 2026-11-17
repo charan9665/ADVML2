@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+node_modules/
+dist/
+moviemind.sqlite3
+models/q_table.json
+models/offline_q_table_*.json
+models/offline_q_table_*.metadata.json
+data/ml-1m/
+data/ml-1m.zip
+backups/
